@@ -761,8 +761,7 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
         if n > ns[1]:
             break
         p_o_up = unsafe_div(p_o_up * unsafe_sub(A, 1), A)
-        total_share: uint256 = self.total_shares[n]
-        user_share: uint256 = ticks[i]
+        user_share: uint256 = 10**18 * ticks[i] / self.total_shares[n]
 
         x: uint256 = 0
         y: uint256 = 0
@@ -773,15 +772,15 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
 
         if x == 0:
             if use_y:
-                XY += y * user_share / total_share
+                XY += y * user_share
             else:
-                XY += y * p_o_up / sqrt_band_ratio * user_share / total_share
+                XY += y * (user_share * p_o_up / sqrt_band_ratio)
             continue
         elif y == 0:
             if use_y:
-                XY += x * sqrt_band_ratio / p_o_up * user_share / total_share
+                XY += x * (user_share * sqrt_band_ratio / p_o_up)
             else:
-                XY += x * user_share / total_share
+                XY += x * user_share
             continue
 
         y0: uint256 = self._get_y0(x, y, p_o, p_o_up, A)
@@ -820,19 +819,19 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
 
         if use_y:
             if x_o == 0:
-                XY += y_o * user_share / total_share
+                XY += y_o * user_share
             else:
-                XY += (y_o + x_o * 10**18 / self.sqrt_int(p_o_up * p_o_use / 10**18)) * user_share / total_share
+                XY += (y_o + x_o * 10**18 / self.sqrt_int(p_o_up * p_o_use / 10**18)) * user_share
         else:
             if y_o == 0:
-                XY += x_o * user_share / total_share
+                XY += x_o * user_share
             else:
-                XY += (x_o + y_o * self.sqrt_int(p_o_up * p_o_use / 10**18) / 10**18) * user_share / total_share
+                XY += (x_o + y_o * self.sqrt_int(p_o_up * p_o_use / 10**18) / 10**18) * user_share
 
     if use_y:
-        return unsafe_div(XY, self.collateral_precision)
+        return unsafe_div(XY, self.collateral_precision * 10**18)
     else:
-        return unsafe_div(XY, BORROWED_PRECISION)
+        return unsafe_div(XY, BORROWED_PRECISION * 10**18)
 
 
 @external
