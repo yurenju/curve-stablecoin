@@ -44,6 +44,7 @@ event SetAdminFee:
 
 MAX_INT: constant(int256) = 2**254 + (2**254 - 1)  # 2**255 - 1
 MAX_TICKS: constant(int256) = 50
+MAX_SKIP_TICKS: constant(int256) = 1024
 
 struct UserTicks:
     ns: bytes32  # packs n1 and n2, each is int128
@@ -535,13 +536,13 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
     # pump = False: collateral (ETH) in, borrowable (USD) out; going down
     out.n1 = self.active_band
     out.n2 = out.n1
-    p_o_up: uint256 = self._base_price() * self.p_base_mul / 10**18
+    p_o_up: uint256 = unsafe_div(self._base_price() * self.p_base_mul, 10**18)
     fee: uint256 = self.fee
     admin_fee: uint256 = self.admin_fee
-    in_amount_afee: uint256 = in_amount * fee / 10**18 * admin_fee / 10**18
-    in_amount_left: uint256 = in_amount - in_amount_afee
+    in_amount_afee: uint256 = unsafe_div(unsafe_div(in_amount * fee, 10**18) * admin_fee, 10**18)
+    in_amount_left: uint256 = unsafe_sub(in_amount, in_amount_afee)
     in_amount_used: uint256 = 0
-    fee = (10**18)**2 / (10**18 - fee)
+    fee = (10**18)**2 / unsafe_sub(10**18, fee)
     x: uint256 = self.bands_x[out.n2]
     y: uint256 = self.bands_y[out.n2]
     min_band: int256 = self.min_band
@@ -550,10 +551,16 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
     A: uint256 = self.A
 
     for i in range(MAX_TICKS):
-        y0: uint256 = self._get_y0(x, y, p_o, p_o_up, A)
-        f: uint256 = A * y0 * p_o / p_o_up * p_o / 10**18
-        g: uint256 = unsafe_sub(A, 1) * y0 * p_o_up / p_o
-        Inv: uint256 = (f + x) * (g + y)
+        y0: uint256 = 0
+        f: uint256 = 0
+        g: uint256 = 0
+        Inv: uint256 = 0
+
+        if x > 0 or y > 0:
+            y0 = self._get_y0(x, y, p_o, p_o_up, A)
+            f = A * y0 * p_o / p_o_up * p_o / 10**18
+            g = unsafe_sub(A, 1) * y0 * p_o_up / p_o
+            Inv = (f + x) * (g + y)
 
         if pump:
             if y > 0 and g > 0:
@@ -831,7 +838,7 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
 
         if p_o > p_o_up:  # p_o < p_current_down, all to y
             # x_o = 0
-            y_o = max(Inv / f, g) - g
+            y_o = unsafe_sub(max(Inv / f, g), g)
             if use_y:
                 XY += y_o * user_share / total_share
             else:
@@ -839,15 +846,15 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
 
         elif p_o < p_o_down:  # p_o > p_current_up, all to x
             # y_o = 0
-            x_o = max(Inv / g, f) - f
+            x_o = unsafe_sub(max(Inv / g, f), f)
             if use_y:
                 XY += x_o * sqrt_band_ratio / p_o_up * user_share / total_share
             else:
                 XY += x_o * user_share / total_share
 
         else:
-            y_o = max(self.sqrt_int(Inv / p_o), g) - g
-            x_o = max(Inv / (g + y_o), f) - f
+            y_o = unsafe_sub(max(self.sqrt_int(Inv / p_o), g), g)
+            x_o = unsafe_sub(max(Inv / (g + y_o), f), f)
             # Now adiabatic conversion from definitely in-band
             if use_y:
                 XY += (y_o + x_o * 10**18 / self.sqrt_int(p_o_up * p_o / 10**18)) * user_share / total_share
