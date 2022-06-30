@@ -766,18 +766,23 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
         n += 1
         if n > ns[1]:
             break
-        p_o_up: uint256 = p_o_down
-        p_o_down = unsafe_div(p_o_down * unsafe_sub(A, 1), A)
-        p_current_mid: uint256 = p_o**2 / p_o_down * p_o / p_o_down * unsafe_sub(A, 1) / A
-        total_share: uint256 = self.total_shares[n]
-        user_share: uint256 = ticks[i]
-
         x: uint256 = 0
         y: uint256 = 0
         if n >= n_active:
             y = self.bands_y[n]
         if n <= n_active:
             x = self.bands_x[n]
+        if x == 0 and y == 0:
+            continue
+
+        total_share: uint256 = self.total_shares[n]
+        user_share: uint256 = ticks[i]
+        if total_share == 0 or user_share == 0:
+            continue
+
+        p_o_up: uint256 = p_o_down
+        p_o_down = unsafe_div(p_o_down * unsafe_sub(A, 1), A)
+        p_current_mid: uint256 = p_o**2 / p_o_down * p_o / p_o_down * unsafe_sub(A, 1) / A
 
         # if p_o > p_o_up - we "trade" everything to y and then convert to the result
         # if p_o < p_o_down - "trade" to x, then convert to result
@@ -787,10 +792,6 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
 
         # Cases when special conversion is not needed (to save on computations)
         if x == 0 or y == 0:
-
-            if x == 0 and y == 0:
-                continue
-
             if p_o > p_o_up:  # p_o < p_current_down
                 # all to y at constant p_o, then to target currency adiabatically
                 y_equiv: uint256 = y
