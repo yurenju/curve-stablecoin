@@ -175,7 +175,7 @@ def _base_price() -> uint256:
     """
     Base price grows with time to account for interest rate (which is 0 by default)
     """
-    return self.base_price * self._rate_mul() / 10**18
+    return unsafe_div(self.base_price * self._rate_mul(), 10**18)
 
 
 @external
@@ -277,10 +277,10 @@ def _get_y0(x: uint256, y: uint256, p_o: uint256, p_o_up: uint256, A: uint256) -
     if x > 0:
         b = p_o_up * unsafe_sub(A, 1) * x / p_o
     if y > 0:
-        b += A * p_o**2 / p_o_up * y / 10**18
+        b += unsafe_div(A * p_o**2 / p_o_up * y, 10**18)
     if x > 0 and y > 0:
-        D: uint256 = b**2 + (4 * A) * p_o * y / 10**18 * x
-        return (b + self.sqrt_int(D / 10**18)) * 10**18 / ((2 * A) * p_o)
+        D: uint256 = b**2 + unsafe_div((4 * A) * p_o * y, 10**18) * x
+        return (b + self.sqrt_int(unsafe_div(D, 10**18))) * 10**18 / ((2 * A) * p_o)
     else:
         return b * 10**18 / (A * p_o)
 
@@ -293,7 +293,7 @@ def get_y0(n: int256) -> uint256:
     p_o: uint256 = self.price_oracle_contract.price()
     p_oracle_up: uint256 = 0
     if n == MAX_INT:
-        p_oracle_up = self._base_price() * self.p_base_mul / 10**18
+        p_oracle_up = unsafe_div(self._base_price() * self.p_base_mul, 10**18)
     else:
         p_oracle_up = self._p_oracle_band(n, False)
 
@@ -531,11 +531,30 @@ def rugpull(coin: address, _to: address, val: uint256):
 @internal
 @view
 def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade:
-    out: DetailedTrade = empty(DetailedTrade)
     # pump = True: borrowable (USD) in, collateral (ETH) out; going up
     # pump = False: collateral (ETH) in, borrowable (USD) out; going down
+    min_band: int256 = self.min_band
+    max_band: int256 = self.max_band
+    out: DetailedTrade = empty(DetailedTrade)
     out.n1 = self.active_band
+    # Prepare x,y and skip empty ticks
+    x: uint256 = 0
+    y: uint256 = 0
+    for i in range(MAX_SKIP_TICKS):
+        x = self.bands_x[out.n1]
+        y = self.bands_y[out.n1]
+        if x > 0 or y > 0:
+            break
+        if pump:
+            if out.n1 == max_band:
+                break
+            out.n1 += 1
+        else:
+            if out.n1 == min_band:
+                break
+            out.n1 -= 1
     out.n2 = out.n1
+
     p_o_up: uint256 = unsafe_div(self._base_price() * self.p_base_mul, 10**18)
     fee: uint256 = self.fee
     admin_fee: uint256 = self.admin_fee
@@ -543,10 +562,6 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
     in_amount_left: uint256 = unsafe_sub(in_amount, in_amount_afee)
     in_amount_used: uint256 = 0
     fee = (10**18)**2 / unsafe_sub(10**18, fee)
-    x: uint256 = self.bands_x[out.n2]
-    y: uint256 = self.bands_y[out.n2]
-    min_band: int256 = self.min_band
-    max_band: int256 = self.max_band
     collateral_precision: uint256 = self.collateral_precision
     A: uint256 = self.A
 
@@ -558,14 +573,14 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
 
         if x > 0 or y > 0:
             y0 = self._get_y0(x, y, p_o, p_o_up, A)
-            f = A * y0 * p_o / p_o_up * p_o / 10**18
+            f = unsafe_div(A * y0 * p_o / p_o_up * p_o, 10**18)
             g = unsafe_sub(A, 1) * y0 * p_o_up / p_o
             Inv = (f + x) * (g + y)
 
         if pump:
             if y > 0 and g > 0:
                 x_dest: uint256 = Inv / g - f
-                if (x_dest - x) * fee / 10**18 >= in_amount_left:
+                if unsafe_div((x_dest - x) * fee, 10**18) >= in_amount_left:
                     # This is the last band
                     out.last_tick_j = Inv / (f + (x + in_amount_left * 10**18 / fee)) - g  # Should be always >= 0
                     x += in_amount_left  # x is precise after this
@@ -577,7 +592,7 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
 
                 else:
                     # We go into the next band
-                    dx: uint256 = (x_dest - x) * fee / 10**18
+                    dx: uint256 = unsafe_div((x_dest - x) * fee, 10**18)
                     in_amount_left -= dx
                     out.ticks_in[i] = x + dx
                     in_amount_used += dx
@@ -594,7 +609,7 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
         else:  # dump
             if x > 0 and f > 0:
                 y_dest: uint256 = Inv / f - g
-                if (y_dest - y) * fee / 10**18 >= in_amount_left:
+                if unsafe_div((y_dest - y) * fee, 10**18) >= in_amount_left:
                     # This is the last band
                     out.last_tick_j = Inv / (g + (y + in_amount_left * 10**18 / fee)) - f
                     y += in_amount_left
@@ -605,7 +620,7 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
 
                 else:
                     # We go into the next band
-                    dy: uint256 = (y_dest - y) * fee / 10**18
+                    dy: uint256 = unsafe_div((y_dest - y) * fee, 10**18)
                     in_amount_left -= dy
                     out.ticks_in[i] = y + dy
                     in_amount_used += dy
@@ -814,7 +829,7 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
                 # all to x at constant p_o, then to target currency adiabatically
                 x_equiv: uint256 = x
                 if x == 0:
-                    x_equiv = y * p_current_mid / 10**18
+                    x_equiv = unsafe_div(y * p_current_mid, 10**18)
                 if use_y:
                     XY += x_equiv * sqrt_band_ratio / p_o_up * user_share / total_share
                 else:
@@ -825,8 +840,7 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
         # So we need more heavy math
 
         y0: uint256 = self._get_y0(x, y, p_o, p_o_up, A)
-        # assert y0 > 870201316668619669099629  # XXX  <- true
-        f: uint256 = A * y0 * p_o / p_o_up * p_o / 10**18
+        f: uint256 = unsafe_div(A * y0 * p_o / p_o_up * p_o, 10**18)
         g: uint256 = unsafe_sub(A, 1) * y0 * p_o_up / p_o
         # (f + x)(g + y) = const = p_top * A**2 * y0**2 = I
         Inv: uint256 = (f + x) * (g + y)
@@ -857,10 +871,10 @@ def get_xy_up(user: address, use_y: bool) -> uint256:
             x_o = unsafe_sub(max(Inv / (g + y_o), f), f)
             # Now adiabatic conversion from definitely in-band
             if use_y:
-                XY += (y_o + x_o * 10**18 / self.sqrt_int(p_o_up * p_o / 10**18)) * user_share / total_share
+                XY += (y_o + x_o * 10**18 / self.sqrt_int(unsafe_div(p_o_up * p_o, 10**18))) * user_share / total_share
 
             else:
-                XY += (x_o + y_o * self.sqrt_int(p_o_down * p_o / 10**18) / 10**18) * user_share / total_share
+                XY += (x_o + unsafe_div(y_o * self.sqrt_int(unsafe_div(p_o_down * p_o, 10**18)), 10**18)) * user_share / total_share
 
     if use_y:
         return unsafe_div(XY, self.collateral_precision)
