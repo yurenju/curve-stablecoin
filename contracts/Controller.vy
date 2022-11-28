@@ -139,6 +139,7 @@ def __init__(
     @param loan_discount Discount of the maximum loan size compare to get_x_down() value
     @param liquidation_discount Discount of the maximum loan size compare to
            get_x_down() for "bad liquidation" purposes
+           liquidation_discount 最大貸款規模的折扣與 get_x_down() 相比用於 "不良清算" 目的
     @param amm AMM address (Already deployed from blueprint)
     """
     FACTORY = Factory(msg.sender)
@@ -305,6 +306,8 @@ def get_y_effective(collateral: uint256, N: uint256, discount: uint256) -> uint2
     @notice Intermediary method which calculates y_effective defined as x_effective * p_base,
             however discounted by loan_discount.
             x_effective is an amount which can be obtained from collateral when liquidating
+            計算 y_effective 的中間方法定義為 x_effective * p_base 但是由 loan_discount 打折。
+            x_effective 是清算時可以從抵押品中獲得的金額
     @param collateral Amount of collateral to get the value for
     @param N Number of bands the deposit is made into
     @param discount Loan discount at 1e18 base (e.g. 1e18 == 100%)
@@ -323,20 +326,22 @@ def get_y_effective(collateral: uint256, N: uint256, discount: uint256) -> uint2
         y_effective = unsafe_add(y_effective, d_y_effective)
     return y_effective
 
-
 @internal
 @view
 def _calculate_debt_n1(collateral: uint256, debt: uint256, N: uint256) -> int256:
     """
     @notice Calculate the upper band number for the deposit to sit in to support
             the given debt. Reverts if requested debt is too high.
+            計算存入抵押品所對應的最上方的波段編號，用來支持給定的債務
     @param collateral Amount of collateral (at its native precision)
     @param debt Amount of requested debt
     @param N Number of bands to deposit into
     @return Upper band n1 (n1 <= n2) to deposit into. Signed integer
     """
     assert debt > 0, "No loan"
+    # 先取得目前正在運作中的波段
     n0: int256 = AMM.active_band()
+    # 取得波段上緣的價格, 3000
     p_base: uint256 = AMM.p_oracle_up(n0)
 
     # x_effective = y / N * p_oracle_up(n1) * sqrt((A - 1) / A) * sum_{0..N-1}(((A-1) / A)**k)
@@ -352,6 +357,7 @@ def _calculate_debt_n1(collateral: uint256, debt: uint256, N: uint256) -> int256
     # - we revert.
 
     # n1 is band number based on adiabatic trading, e.g. when p_oracle ~ p
+    # n1 是基於絕熱交易的波段編號，例如 當 p_oracle ~ p
     y_effective = y_effective * p_base / (debt + 1)  # Now it's a ratio
 
     # n1 = floor(log2(y_effective) / self.logAratio)
@@ -467,6 +473,7 @@ def create_loan(collateral: uint256, debt: uint256, N: uint256):
 
     n1: int256 = self._calculate_debt_n1(collateral, debt, N)
     n2: int256 = n1 + convert(N - 1, int256)
+    # n1 - n2 之間總共有 N 個波段
 
     rate_mul: uint256 = self._rate_mul_w()
     self.loans[msg.sender] = Loan({initial_debt: debt, rate_mul: rate_mul})
@@ -476,9 +483,11 @@ def create_loan(collateral: uint256, debt: uint256, N: uint256):
     self._total_debt.initial_debt = total_debt
     self._total_debt.rate_mul = rate_mul
 
+    # 把抵押品存入波段 n1 - n2 之間
     AMM.deposit_range(msg.sender, collateral, n1, n2, False)
     assert COLLATERAL_TOKEN.transferFrom(msg.sender, AMM.address, collateral, default_return_value=True)
 
+    # 鑄造出來的穩定幣轉給使用者之後把債務加到 minted 裡面
     STABLECOIN.transfer(msg.sender, debt)
     self.minted += debt
 

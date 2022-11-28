@@ -1,3 +1,4 @@
+import warnings
 import boa
 import pytest
 from hypothesis import given, settings
@@ -6,19 +7,21 @@ from datetime import timedelta
 from ..conftest import approx
 
 
-def test_create_loan(controller_factory, stablecoin, collateral_token, market_controller, market_amm, monetary_policy, accounts):
+def test_create_loan(controller_factory, stablecoin, collateral_token, market_controller, market_amm, monetary_policy, accounts, price_oracle, admin):
     user = accounts[0]
     with boa.env.anchor():
         with boa.env.prank(user):
-            initial_amount = 10**25
+            initial_amount = 10**25 # 10,000,000 WETH
             collateral_token._mint_for_testing(user, initial_amount)
-            c_amount = int(2 * 1e6 * 1e18 * 1.5 / 3000)
+            c_amount = int(2 * 1e6 * 1e18 * 1.5 / 3000) # 1,000 WETH
 
-            l_amount = 2 * 10**6 * 10**18
+            l_amount = 2 * 10**6 * 10**18 # 2,000,000 USD
+            active_band_prev = market_amm.active_band()
             with boa.reverts():
                 market_controller.create_loan(c_amount, l_amount, 5)
 
-            l_amount = 5 * 10**5 * 10**18
+            l_amount = 5 * 10**5 * 10**18 # 500,000
+            # MIN_TICKS is 5, MAX_TICKS is 50
             with boa.reverts('Need more ticks'):
                 market_controller.create_loan(c_amount, l_amount, 4)
             with boa.reverts('Need less ticks'):
@@ -26,9 +29,16 @@ def test_create_loan(controller_factory, stablecoin, collateral_token, market_co
 
             with boa.reverts("Debt too high"):
                 market_controller.create_loan(c_amount // 100, l_amount, 5)
+                # collateral is 1,000 / 100 = 10 WETH to loan 500,000 USD
+
+            p_oracle_up = market_amm.p_oracle_up(0)
+            p_oracle_down = market_amm.p_oracle_down(0)
+            debt_n1 = market_controller.calculate_debt_n1(c_amount, l_amount, 5)
 
             # Phew, the loan finally was created
             market_controller.create_loan(c_amount, l_amount, 5)
+            # 1000 WETH to loan 500,000 USD, price is 3000, so collateral value is 3,000,000
+            # 500,000 / 1000 = 500
             # But cannot do it again
             with boa.reverts('Loan already created'):
                 market_controller.create_loan(c_amount, 1, 5)
@@ -42,6 +52,30 @@ def test_create_loan(controller_factory, stablecoin, collateral_token, market_co
 
             p_up, p_down = market_controller.user_prices(user)
             p_lim = l_amount / c_amount / (1 - market_controller.loan_discount()/1e18)
+            band_up, band_down = market_amm.read_user_tick_numbers(user)
+            active_band_after = market_amm.active_band()
+
+            # p_up: 543.3808593758635
+            # p_down: 516.7497905745059
+            # p_lim: 526.3157894736843
+            # A: 100
+            # band_up: 170
+            # band_down: 174
+            # active_band_prev: 0
+            # active_band_after: 0
+            # p_oracle_up: 3000.0
+            # p_oracle_down: 2970.0
+            # debt_n1: 170
+            # amm.get_x_down(user): 529,951.5779202336
+
+            for i in range(175):
+                warnings.warn(f"for {i}, p_up: {market_amm.p_oracle_up(i)/1e18}, p_down: {market_amm.p_oracle_down(i)/1e18} ")
+                warnings.warn(f"for {i}, p_current_up: {market_amm.p_current_up(i)/1e18}, p_current_down: {market_amm.p_current_down(i)/1e18} ")
+            warnings.warn(f"p_up: {p_up/1e18}, p_down: {p_down/1e18}, p_lim: {p_lim}, market_amm.A(): {market_amm.A()}")
+            warnings.warn(f"band_up: {band_up}, band_down: {band_down}, active_band_prev: {active_band_prev}, active_band_after: {active_band_after}")
+            warnings.warn(f"p_oracle_up: {p_oracle_up/1e18}, p_oracle_down: {p_oracle_down/1e18}")
+            warnings.warn(f"debt_n1: {debt_n1}")
+            warnings.warn(f"get_x_down: {market_amm.get_x_down(user)/1e18}")
             assert approx(p_lim, (p_down * p_up)**0.5 / 1e18, 2 / market_amm.A())
 
             h = market_controller.health(user) / 1e18 + 0.02
@@ -49,6 +83,29 @@ def test_create_loan(controller_factory, stablecoin, collateral_token, market_co
 
             h = market_controller.health(user, True) / 1e18 + 0.02
             assert approx(h, c_amount * 3000 / l_amount - 1, 0.02)
+
+            for band in range(170, 175):
+                warnings.warn(f"WETH amount in band {band}: {market_amm.bands_y(band)/1e18}")
+
+            target_band = 170
+            warnings.warn(f"prev x: {market_amm.bands_x(target_band)/1e18}, y: {market_amm.bands_y(target_band)/1e18}")
+            warnings.warn(f"prev active band: {market_amm.active_band()}")
+
+            in_amount = 100 * 10 ** 18 # 100 crvUSD
+            updated_oracle_price = 540 * 10 ** 18
+            [x, y] = [val / 1e18 for val in market_amm.ext_calc_swap_out(True, in_amount, updated_oracle_price)[:2]]
+            warnings.warn(f"calc swap out: x: {x}, y: {y}, price: {x/y}")
+            [x, y] = [val / 1e18 for val in market_amm.ext_calc_swap_out(True, in_amount, 535* 10 **18)[:2]]
+            warnings.warn(f"calc swap out: x: {x}, y: {y}, price: {x/y}")
+
+            # with boa.env.prank(admin):
+            #     price_oracle.set_price(updated_oracle_price)
+            # with boa.env.prank(user):
+            #     market_amm.exchange(0, 1, in_amount, 0)
+            # warnings.warn(f"after x: {market_amm.bands_x(target_band)/1e18}, y: {market_amm.bands_y(target_band)/1e18}")
+            # warnings.warn(f"after active band: {market_amm.active_band()}")
+            # [x1, y1] = [val / 1e18 for val in market_amm.ext_calc_swap_out(True, in_amount, updated_oracle_price)[:2]]
+            # warnings.warn(f"calc swap out: x1: {x1}, y1: {y1}, price: {x1/y1}")
 
 
 @given(

@@ -4,26 +4,39 @@
 # =======================
 # * ticks, bands - price ranges where liquiditity is deposited
 # * x - coin which is being borrowed, typically stablecoin
+# * x - 被借出來的代幣，通常都是穩定幣
 # * y - collateral coin (for example, wETH)
+# * y - 抵押品，比如說 wETH
 # * A - amplification, the measure of how concentrated the tick is
+# * A - 放大器, 用來衡量波段的集中程度
 # * rate - interest rate
 # * rate_mul - rate multiplier, 1 + integral(rate * dt)
 # * active_band - current band. Other bands are either in one or other coin, but not both
+# active_band - 目前的波段，其他的波段要不是 token A 不然就是 token B，只有這個波段的會是一個 AMM
 # * min_band - bands below this are definitely empty
+# * min_band - 在此之下的波段肯定是空的
 # * min_band - bands above this are definitely empty
 # * bands_x[n], bands_y[n] - amounts of coin x or y deposited in band n
+# * bands_x[n], bands_y[n] - 在波段 n 裡面被存入的代幣 x 與 y
 # * user_shares[user,n] / total_shares[n] - fraction of n'th band owned by a user
 # * p_oracle - external oracle price (can be from another AMM)
+# * p_oracle - 外部的預言機價格（可能是從其他 AMM）
 # * p (as in get_p) - current price of AMM. It depends not only on the balances (x,y) in the band and active_band, but
 # also on p_oracle
+# * p (as in get_p) - 目前 AMM 的內部價格，它相依於波段與 active_band，而且也相依於外部價格
 # * p_current_up, p_current_down - the value of p at constant p_oracle when y=0 or x=0 respectively for the band n
+# * p_current_up: x=0 也就是沒有穩定幣的狀態，抵押品的價值為多少
+# * p_current_down: 在 y=0 也就是所有抵押品都被賣出的狀況時，價格會是多少
 # * p_oracle_up, p_oracle_down - edges of the band when p=p_oracle (steady state), happen when x=0 or y=0 respectively,
 # for band n.
+# * p_oracle_up，p_oracle_down - 當 p=p_oracle（穩態）時，波段的邊緣分別發生在 x=0 或 y=0 時，對於波段 n。
 # * Grid of bands is set for p_oracle values such as:
 #   * p_oracle_up(n) = base_price * ((A - 1) / A)**n
 #   * p_oracle_down(n) = p_oracle_up(n) * (A - 1) / A = p_oracle_up(n+1)
 # * p_current_up and p_oracle_up change in opposite directions with n
 # * When intereste is accrued - all the grid moves by change of base_price
+# * p_current_up 和 p_oracle_up 隨 n 的變化方向相反
+# * 當利息產生時 - 所有網格都隨著 base_price 的變化而移動
 #
 # Bonding curve reads as:
 # (f + x) * (g + y) = Inv = p_oracle * A**2 * y0**2
@@ -145,9 +158,11 @@ def __init__(
     @param _collateral_token Token used as collateral
     @param _collateral_precision Precision of collateral: we pass it because we want the blueprint to fit into bytecode
     @param _A "Amplification coefficient" which also defines density of liquidity and band size. Relative band size is 1/_A
+              "放大係數"，它還定義了流動性密度和波段大小。 相對波段大小為 1/_A
     @param _sqrt_band_ratio Precomputed int(sqrt(A / (A - 1)) * 1e18)
     @param _log_A_ratio Precomputed int(ln(A / (A - 1)) * 1e18)
     @param _base_price Typically the initial crypto price at which AMM is deployed. Will correspond to band 0
+                       通常是部署 AMM 的初始加密貨幣價格。 會對應 band 0
     @param fee Relative fee of the AMM: int(fee * 1e18)
     @param admin_fee Admin fee: how much of fee goes to admin. 50% === int(0.5 * 1e18)
     @param _price_oracle_contract External price oracle which has price() and price_w() methods
@@ -261,6 +276,7 @@ def get_base_price() -> uint256:
 def _p_oracle_up(n: int256) -> uint256:
     """
     @notice Upper oracle price for the band to have liquidity when p = p_oracle
+            當 p = p_oracle 時，帶具有流動性的 oracle 上限價格
     @param n Band number (can be negative)
     @return Price at 1e18 base
     """
@@ -347,6 +363,7 @@ def p_current_down(n: int256) -> uint256:
 def p_oracle_up(n: int256) -> uint256:
     """
     @notice Highest oracle price for the band to have liquidity when p = p_oracle
+            當 p = p_oracle 時，波段具有流動性的最高預言機價格
     @param n Band number (can be negative)
     @return Price at 1e18 base
     """
@@ -371,6 +388,8 @@ def _get_y0(x: uint256, y: uint256, p_o: uint256, p_o_up: uint256) -> uint256:
     @notice Calculate y0 for the invariant based on current liquidity in band.
             The value of y0 has a meaning of amount of collateral when band has no stablecoin
             but current price is equal to both oracle price and upper band price.
+            根據波段內現有的流動性來計算不變量的 y0。當波段中沒有穩定幣但當前價格等於預言機與波段上界的價格時
+            y0 的數值就是抵押品的數量。
     @param x Amount of stablecoin in band
     @param y Amount of collateral in band
     @param p_o External oracle price
@@ -481,6 +500,7 @@ def read_user_tick_numbers(user: address) -> int256[2]:
     @notice Unpacks and reads user tick numbers
     @param user User address
     @return Lowest and highest band the user deposited into
+            顯示使用者入金的最低的波段跟最高的波段
     """
     return self._read_user_tick_numbers(user)
 
@@ -548,6 +568,7 @@ def has_liquidity(user: address) -> bool:
 def deposit_range(user: address, amount: uint256, n1: int256, n2: int256, move_coins: bool):
     """
     @notice Deposit for a user in a range of bands. Only admin contract (Controller) can do it
+            替使用者存款到一個範圍的波段裡面，只有 admin 合約（也就是 Controller）可以呼叫
     @param user User address
     @param amount Amount of collateral to deposit
     @param n1 Lower band in the deposit range
@@ -709,6 +730,10 @@ def withdraw(user: address, move_to: address) -> uint256[2]:
 
     return [total_x, total_y]
 
+@external
+@view
+def ext_calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade:
+    return self.calc_swap_out(pump, in_amount, p_o)
 
 @internal
 @view
@@ -718,6 +743,8 @@ def calc_swap_out(pump: bool, in_amount: uint256, p_o: uint256) -> DetailedTrade
             If couldn't exchange all - will also update the amount which was actually used.
             Also returns other parameters related to state after swap.
             This function is core to the AMM functionality.
+            計算交換後可以獲得的金額。 如果無法全部兌換 - 也將更新實際使用的金額。
+            交換後還返回與狀態相關的其他參數。 此功能是 AMM 功能的核心。
     @param pump Indicates whether the trade buys or sells collateral
     @param in_amount Amount of token going in
     @param p_o Current oracle price
@@ -958,6 +985,7 @@ def exchange(i: uint256, j: uint256, in_amount: uint256, min_amount: uint256, _f
         else:
             n = unsafe_add(n, 1)
 
+    # 指定一個新的 active band
     self.active_band = n
 
     log TokenExchange(_for, i, in_amount_done, j, out_amount_done)
@@ -1107,6 +1135,7 @@ def get_y_up(user: address) -> uint256:
 def get_x_down(user: address) -> uint256:
     """
     @notice Measure the amount of x (stablecoin) if we trade adiabatically down
+            找出 x (穩定幣) 的數量當 x 一直往下跌
     @param user User the amount is calculated for
     @return Amount of coins
     """

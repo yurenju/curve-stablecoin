@@ -55,6 +55,7 @@ def monetary_policy(admin):
 @pytest.fixture(scope="module")
 def market(controller_factory, collateral_token, monetary_policy, price_oracle, admin):
     with boa.env.prank(admin):
+        # A is 100, load_discount is 0.05
         if controller_factory.n_collaterals() == 0:
             controller_factory.add_market(
                 collateral_token.address, 100, 10**16, 0,
